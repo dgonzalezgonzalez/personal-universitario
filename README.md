@@ -18,5 +18,18 @@ No crea ni requiere entorno virtual. Usa `pandas` y `openpyxl` si están instala
 - `data/processed/university_dimensions.csv`: tabla universidad-territorio-tipo.
 - `data/processed/university_dimensions.xlsx`: misma tabla en Excel.
 - `data/processed/codebook.md` y `data/processed/codebook.xlsx`: codebook basado en la metainformación oficial de los ficheros PC-Axis.
+- `data/dashboard/index.html`: dashboard interactivo estático con pestañas PDI, PTGAS y PEI, generado a partir de `data/processed/personal_universitario_long.csv`.
+- `data/dashboard/airef-logo.png`: logotipo usado por el dashboard.
 
 La base larga conserva categorías totales como `España`, `Ambos sexos` y `Total`.
+
+## Dashboard
+
+El dashboard replica la estructura visual del panel de prestaciones: pestañas superiores, filtros, dos gráficos SVG y exportación CSV por gráfico.
+
+Filtros disponibles: `Universidad`, `Centro`, `Provincia`, `Comunidad autónoma`, `Tipo de universidad`, `Modalidad de universidad`, `Sexo` y `Grupo de edad`. El filtro `Programa investigador` aparece solo en la pestaña `PEI`.
+
+Los gráficos muestran:
+
+- `Número de empleados`: evolución anual de la selección.
+- `Peso sobre el total`: porcentaje de la selección sobre el total nacional del mismo colectivo.

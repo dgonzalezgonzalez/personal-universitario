@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import csv
+import json
 import ssl
 import sys
 import urllib.error
@@ -14,6 +15,7 @@ import pandas as pd
 BASE_URL = "https://estadisticas.ciencia.gob.es/jaxiPx/files/_px/es"
 RAW_DIR = Path("data/raw")
 PROCESSED_DIR = Path("data/processed")
+DASHBOARD_DIR = Path("data/dashboard")
 
 
 @dataclass(frozen=True)
@@ -174,6 +176,7 @@ AGGREGATE_ROWS = {
 def mkdirs() -> None:
     RAW_DIR.mkdir(parents=True, exist_ok=True)
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+    DASHBOARD_DIR.mkdir(parents=True, exist_ok=True)
 
 
 def download(url: str) -> bytes:
@@ -459,12 +462,544 @@ The official CSV/PC-Axis files use `..` and `.` in some cells. The pipeline writ
     pd.DataFrame(rows, columns=["variable", "description"]).to_excel(PROCESSED_DIR / "codebook.xlsx", index=False)
 
 
+def clean_options(values: pd.Series) -> list[str]:
+    options = sorted(str(v) for v in values.dropna().unique() if str(v).strip())
+    if "Total" in options:
+        return ["Total"] + [v for v in options if v != "Total"]
+    if "España" in options:
+        return ["España"] + [v for v in options if v != "España"]
+    if "Ambos sexos" in options:
+        return ["Ambos sexos"] + [v for v in options if v != "Ambos sexos"]
+    return options
+
+
+def build_dashboard_payload(data: pd.DataFrame) -> dict[str, object]:
+    dimensions = [
+        "Universidad",
+        "Centro",
+        "Provincia",
+        "Comunidad autónoma",
+        "Tipo de universidad",
+        "Modalidad de universidad",
+        "Sexo",
+        "Grupo de edad",
+        "Programa investigador",
+    ]
+    rows: list[list[object]] = []
+    for metric in ["PDI", "PTGAS", "PEI"]:
+        subset = data[data[metric].notna()]
+        for record in subset[["Curso", *dimensions, metric]].itertuples(index=False, name=None):
+            *dims, value = record
+            rows.append([metric, *["" if pd.isna(v) else v for v in dims], float(value)])
+
+    return {
+        "periods": clean_options(data["Curso"]),
+        "staff": ["PDI", "PTGAS", "PEI"],
+        "filters": {col: clean_options(data[col]) for col in dimensions},
+        "rows": rows,
+    }
+
+
+def write_dashboard(data: pd.DataFrame) -> None:
+    payload = json.dumps(build_dashboard_payload(data), ensure_ascii=False, separators=(",", ":"))
+    html = f"""<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Indicadores de personal universitario</title>
+  <style>
+    :root {{
+      --burgundy: #83082A;
+      --crimson: #D00D43;
+      --rose: #E397A0;
+      --rose-2: #D46271;
+      --text: #404040;
+      --muted: #6f6f6f;
+      --grid: #CCCCCC;
+      --line: #e4d7db;
+      --page: #f6f3f4;
+      --panel: #ffffff;
+    }}
+    * {{ box-sizing: border-box; }}
+    body {{
+      margin: 0;
+      background: var(--page);
+      color: var(--text);
+      font-family: "Century Gothic", "Aptos", "Segoe UI", sans-serif;
+      letter-spacing: 0;
+    }}
+    header {{
+      background: #fff;
+      border-bottom: 1px solid var(--line);
+    }}
+    .topbar, main, footer {{
+      max-width: 1280px;
+      margin: 0 auto;
+      padding-left: 24px;
+      padding-right: 24px;
+    }}
+    .topbar {{
+      min-height: 62px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 24px;
+    }}
+    .brand {{
+      display: flex;
+      align-items: center;
+      gap: 18px;
+      min-width: 0;
+    }}
+    .logo {{
+      width: 38px;
+      height: 38px;
+      object-fit: contain;
+      display: block;
+    }}
+    h1 {{
+      margin: 0;
+      font-size: 25px;
+      line-height: 1.2;
+      font-weight: 700;
+    }}
+    .subtitle {{
+      margin: 5px 0 0;
+      font-size: 13px;
+      color: var(--muted);
+    }}
+    main {{
+      padding-top: 22px;
+      padding-bottom: 32px;
+    }}
+    .tabs {{
+      display: flex;
+      gap: 4px;
+      border-bottom: 1px solid var(--line);
+      margin-bottom: 16px;
+    }}
+    .tab {{
+      appearance: none;
+      border: 0;
+      background: transparent;
+      color: var(--text);
+      padding: 14px 22px;
+      font: inherit;
+      font-size: 14px;
+      font-weight: 700;
+      cursor: pointer;
+      border-bottom: 4px solid transparent;
+    }}
+    .tab[aria-selected="true"] {{
+      color: var(--burgundy);
+      border-bottom-color: var(--burgundy);
+    }}
+    .filters {{
+      display: grid;
+      grid-template-columns: repeat(5, minmax(150px, 1fr));
+      gap: 12px;
+      margin: 16px 0 18px;
+      align-items: end;
+    }}
+    label {{
+      display: grid;
+      gap: 6px;
+      font-size: 12px;
+      font-weight: 700;
+      color: var(--text);
+    }}
+    select {{
+      width: 100%;
+      min-height: 36px;
+      border: 1px solid var(--line);
+      border-radius: 3px;
+      background: #fff;
+      color: var(--text);
+      padding: 6px 9px;
+      font: inherit;
+      font-size: 13px;
+    }}
+    .grid {{
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 16px;
+    }}
+    .panel {{
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      box-shadow: 0 2px 7px rgba(64,64,64,.14);
+      min-width: 0;
+      overflow: hidden;
+    }}
+    .panel-head {{
+      display: flex;
+      justify-content: space-between;
+      gap: 14px;
+      align-items: start;
+      padding: 16px 16px 0;
+    }}
+    h2 {{
+      margin: 0;
+      font-size: 16px;
+      line-height: 1.25;
+      font-weight: 700;
+    }}
+    .desc {{
+      margin: 5px 0 0;
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.35;
+    }}
+    .csv {{
+      border: 1px solid var(--burgundy);
+      background: #fff;
+      color: var(--burgundy);
+      min-width: 52px;
+      height: 30px;
+      font: inherit;
+      font-size: 12px;
+      font-weight: 700;
+      cursor: pointer;
+    }}
+    .chart {{
+      width: 100%;
+      height: 360px;
+      display: block;
+      overflow: visible;
+      padding: 6px 12px 14px;
+    }}
+    .hidden {{ display: none; }}
+    .source {{
+      display: none;
+      margin: 0;
+      padding: 0 16px 14px;
+      color: var(--muted);
+      font-size: 11px;
+    }}
+    .tooltip {{
+      position: fixed;
+      z-index: 20;
+      pointer-events: none;
+      opacity: 0;
+      max-width: 260px;
+      background: #fff;
+      border: 1px solid var(--line);
+      box-shadow: 0 10px 26px rgba(64,64,64,.16);
+      padding: 9px 10px;
+      font-size: 12px;
+      line-height: 1.35;
+    }}
+    footer {{
+      max-width: none;
+      background: #4f0018;
+      padding-top: 18px;
+      padding-bottom: 28px;
+      color: #fff;
+      font-size: 12px;
+      text-align: center;
+    }}
+    @media (max-width: 980px) {{
+      .filters {{ grid-template-columns: repeat(2, minmax(0, 1fr)); }}
+      .grid {{ grid-template-columns: 1fr; }}
+    }}
+    @media (max-width: 640px) {{
+      .topbar, main, footer {{ padding-left: 14px; padding-right: 14px; }}
+      .topbar {{ align-items: start; padding-top: 16px; padding-bottom: 16px; }}
+      .brand {{ align-items: start; flex-direction: column; gap: 8px; }}
+      h1 {{ font-size: 21px; }}
+      .tabs {{ overflow-x: auto; }}
+      .tab {{ white-space: nowrap; padding-left: 12px; padding-right: 12px; }}
+      .filters {{ grid-template-columns: 1fr; }}
+      .chart {{ height: 310px; }}
+    }}
+  </style>
+</head>
+<body>
+  <header>
+    <div class="topbar">
+      <div class="brand">
+        <img class="logo" src="airef-logo.png" alt="AIReF">
+        <div>
+          <h1>Indicadores de personal universitario</h1>
+          <p class="subtitle">Dashboard interactivo de PDI, PTGAS y PEI por universidad (2015-2024)</p>
+        </div>
+      </div>
+    </div>
+  </header>
+  <main>
+    <nav class="tabs" aria-label="Tipo de personal">
+      <button class="tab" data-tab="PDI" aria-selected="true">PDI</button>
+      <button class="tab" data-tab="PTGAS" aria-selected="false">PTGAS</button>
+      <button class="tab" data-tab="PEI" aria-selected="false">PEI</button>
+    </nav>
+
+    <section class="filters" aria-label="Filtros">
+      <label>Universidad<select id="university"></select></label>
+      <label>Centro<select id="center"></select></label>
+      <label>Provincia<select id="province"></select></label>
+      <label>Comunidad autónoma<select id="ccaa"></select></label>
+      <label>Tipo de universidad<select id="universityType"></select></label>
+      <label>Modalidad de universidad<select id="universityMode"></select></label>
+      <label>Sexo<select id="sex"></select></label>
+      <label>Grupo de edad<select id="age"></select></label>
+      <label id="programPanel" class="hidden">Programa investigador<select id="program"></select></label>
+    </section>
+
+    <section class="grid">
+      <article class="panel" id="evolutionPanel">
+        <div class="panel-head">
+          <div>
+            <h2>Número de empleados</h2>
+            <p class="desc">Serie anual de la selección.</p>
+          </div>
+          <button class="csv" data-download="evolution">CSV</button>
+        </div>
+        <svg id="evolution" class="chart" role="img"></svg>
+        <p class="source">Fuente: AIReF a partir de SIIU.</p>
+      </article>
+
+      <article class="panel" id="sharePanel">
+        <div class="panel-head">
+          <div>
+            <h2>Peso sobre el total</h2>
+            <p class="desc">Porcentaje de la selección sobre el total nacional.</p>
+          </div>
+          <button class="csv" data-download="share">CSV</button>
+        </div>
+        <svg id="share" class="chart" role="img"></svg>
+        <p class="source">Fuente: AIReF a partir de SIIU.</p>
+      </article>
+    </section>
+  </main>
+  <footer>© Autoridad Independiente de Responsabilidad Fiscal (AIReF), AAI. Todos los derechos reservados.</footer>
+  <div id="tooltip" class="tooltip"></div>
+
+  <script>
+    const db = {payload};
+    const idx = {{metric:0, period:1, university:2, center:3, province:4, ccaa:5, universityType:6, universityMode:7, sex:8, age:9, program:10, value:11}};
+    const filterMap = {{
+      university: "Universidad",
+      center: "Centro",
+      province: "Provincia",
+      ccaa: "Comunidad autónoma",
+      universityType: "Tipo de universidad",
+      universityMode: "Modalidad de universidad",
+      sex: "Sexo",
+      age: "Grupo de edad",
+      program: "Programa investigador"
+    }};
+    const els = Object.fromEntries(Object.keys(filterMap).map(k => [k, document.getElementById(k)]));
+    const downloads = {{}};
+    const state = {{ tab: "PDI" }};
+    const tooltip = document.getElementById("tooltip");
+
+    function init() {{
+      Object.entries(filterMap).forEach(([key, label]) => fillSelect(els[key], db.filters[label] || []));
+      document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", () => {{
+        state.tab = btn.dataset.tab;
+        document.querySelectorAll(".tab").forEach(b => b.setAttribute("aria-selected", String(b === btn)));
+        document.getElementById("programPanel").classList.toggle("hidden", state.tab !== "PEI");
+        render();
+      }}));
+      Object.values(els).forEach(el => el.addEventListener("change", render));
+      document.querySelectorAll(".csv").forEach(btn => btn.addEventListener("click", () => downloadCsv(btn.dataset.download)));
+      render();
+    }}
+    function fillSelect(select, values) {{
+      select.innerHTML = "";
+      values.forEach(value => {{
+        const opt = document.createElement("option");
+        opt.value = value;
+        opt.textContent = value || "Sin clasificar";
+        select.appendChild(opt);
+      }});
+    }}
+    function rowMatches(row) {{
+      if (row[idx.metric] !== state.tab) return false;
+      if (state.tab !== "PEI" && row[idx.program]) return false;
+      return Object.keys(els).every(key => {{
+        if (key === "program" && state.tab !== "PEI") return true;
+        return row[idx[key]] === els[key].value;
+      }});
+    }}
+    function selectedRows() {{
+      const grouped = new Map();
+      db.rows.filter(rowMatches).forEach(row => grouped.set(row[idx.period], (grouped.get(row[idx.period]) || 0) + (row[idx.value] || 0)));
+      return db.periods.map(period => ({{ period, value: grouped.get(period) ?? null }})).filter(d => d.value != null);
+    }}
+    function totalRows() {{
+      const grouped = new Map();
+      db.rows.forEach(row => {{
+        if (row[idx.metric] !== state.tab) return;
+        if (row[idx.university] !== "Total" || row[idx.center] !== "Total" || row[idx.sex] !== "Ambos sexos" || row[idx.age] !== "Total") return;
+        if (state.tab === "PEI" && row[idx.program] !== "Total") return;
+        if (state.tab !== "PEI" && row[idx.program]) return;
+        grouped.set(row[idx.period], (grouped.get(row[idx.period]) || 0) + (row[idx.value] || 0));
+      }});
+      return db.periods.map(period => ({{ period, value: grouped.get(period) ?? null }})).filter(d => d.value != null);
+    }}
+    function render() {{
+      const rows = selectedRows();
+      renderEvolution(rows);
+      renderShare(rows);
+    }}
+    function shiftYear(period, delta) {{
+      const y = Number(period.slice(0, 4)) + delta;
+      return `${{y}}-${{y + 1}}`;
+    }}
+    function yoyFor(rows, point) {{
+      const prev = rows.find(r => r.period === shiftYear(point.period, -1));
+      return prev && prev.value ? (point.value / prev.value - 1) * 100 : null;
+    }}
+    function selectionLabel() {{ return state.tab; }}
+    function renderEvolution(rows) {{
+      const svg = document.getElementById("evolution"); clear(svg);
+      const {{ w, h, m }} = dims(svg);
+      const values = rows.map(r => r.value).filter(v => v != null);
+      if (!values.length) return noData(svg, w, h);
+      const maxY = niceAxisMax(values);
+      const x = i => m.l + i / Math.max(1, rows.length - 1) * (w - m.l - m.r);
+      const y = v => h - m.b - v / maxY * (h - m.t - m.b);
+      grid(svg, w, h, m, 5, maxY, countAxisLabel(maxY));
+      axisLabels(svg, rows, x, h, m);
+      axisTitles(svg, w, h, m, "Curso", "Empleados");
+      const pts = rows.map((r, i) => [x(i), y(r.value || 0), r]);
+      smoothLine(svg, pts, "#83082A", 2.5);
+      hoverPoints(svg, pts, r => `<strong>${{r.period}}</strong><br>${{selectionLabel()}}: ${{fmtInt(r.value)}}<br>Variación interanual: ${{fmtPct(yoyFor(rows, r))}}`);
+      node(svg, "text", {{ x: m.l, y: 18, fill: "#83082A", "font-size": 12, "font-weight": 700 }}, selectionLabel());
+      downloads.evolution = [["Curso","Empleados","Variación interanual"], ...rows.map(r => [r.period, r.value, yoyFor(rows, r)])];
+    }}
+    function renderShare(rows) {{
+      const svg = document.getElementById("share"); clear(svg);
+      const {{ w, h, m }} = dims(svg);
+      const totals = new Map(totalRows().map(r => [r.period, r.value]));
+      const data = rows.map(r => {{
+        const total = totals.get(r.period);
+        return {{ period: r.period, value: total ? r.value / total * 100 : null }};
+      }}).filter(r => r.value != null);
+      if (!data.length) return noData(svg, w, h);
+      const maxY = niceAxisMax(data.map(r => r.value), 100);
+      const x = i => m.l + i / Math.max(1, data.length - 1) * (w - m.l - m.r);
+      const y = v => h - m.b - Math.min(maxY, Math.max(0, v)) / maxY * (h - m.t - m.b);
+      grid(svg, w, h, m, 5, maxY, v => fmtPct(v));
+      axisLabels(svg, data, x, h, m);
+      axisTitles(svg, w, h, m, "Curso", "% sobre total nacional");
+      const pts = data.map((r, i) => [x(i), y(r.value || 0), r]);
+      const base = h - m.b;
+      const polygon = pts.map(p => `${{p[0]}},${{p[1]}}`).join(" ") + " " + [...pts].reverse().map(p => `${{p[0]}},${{base}}`).join(" ");
+      node(svg, "polygon", {{ points: polygon, fill: "#E397A0", opacity: .35 }});
+      smoothLine(svg, pts, "#83082A", 2.5);
+      hoverPoints(svg, pts, r => `<strong>${{r.period}}</strong><br>Peso: ${{fmtPct(r.value)}}<br>Variación interanual: ${{fmtPct(yoyFor(data, r))}}`);
+      downloads.share = [["Curso","Peso sobre total nacional","Variación interanual"], ...data.map(r => [r.period, r.value, yoyFor(data, r)])];
+    }}
+    function dims(svg) {{
+      const box = svg.getBoundingClientRect();
+      const w = Math.max(320, box.width || 600), h = Math.max(260, box.height || 360);
+      svg.setAttribute("viewBox", `0 0 ${{w}} ${{h}}`);
+      return {{ w, h, m: {{ t: 32, r: 24, b: 48, l: 72 }} }};
+    }}
+    function niceAxisMax(values, cap = Infinity) {{
+      const usable = values.filter(v => v != null && Number.isFinite(v) && v > 0);
+      if (!usable.length) return Number.isFinite(cap) ? cap : 1;
+      const target = Math.min(Math.max(...usable) * 1.12, cap);
+      const pow = Math.pow(10, Math.floor(Math.log10(target)));
+      const scaled = target / pow;
+      const step = scaled <= 1 ? 1 : scaled <= 2 ? 2 : scaled <= 2.5 ? 2.5 : scaled <= 5 ? 5 : 10;
+      return Math.min(step * pow, cap);
+    }}
+    function countAxisLabel(maxValue) {{ return v => maxValue <= 1 && v > 0 ? "" : fmtInt(v); }}
+    function grid(svg, w, h, m, count, maxValue = null, formatter = v => v) {{
+      for (let i = 0; i <= count; i++) {{
+        const y = m.t + i / count * (h - m.t - m.b);
+        node(svg, "line", {{ x1: m.l, y1: y, x2: w - m.r, y2: y, stroke: "#CCCCCC" }});
+        if (maxValue != null) node(svg, "text", {{ x: m.l - 8, y: y + 4, "text-anchor": "end", fill: "#404040", "font-size": 10 }}, formatter(maxValue * (1 - i / count)));
+      }}
+    }}
+    function axisTitles(svg, w, h, m, xLabel, yLabel) {{
+      node(svg, "text", {{ x: (m.l + w - m.r) / 2, y: h - 8, "text-anchor": "middle", fill: "#404040", "font-size": 11, "font-style": "italic" }}, xLabel);
+      node(svg, "text", {{ x: 20, y: (m.t + h - m.b) / 2, "text-anchor": "middle", fill: "#404040", "font-size": 11, transform: `rotate(-90 20 ${{(m.t + h - m.b) / 2}})` }}, yLabel);
+    }}
+    function axisLabels(svg, rows, x, h, m) {{
+      rows.forEach((r, i) => node(svg, "text", {{ x: x(i), y: h - 18, "text-anchor": "middle", fill: "#404040", "font-size": 11 }}, r.period.slice(0, 4)));
+    }}
+    function line(svg, points, color, width, dash = "") {{
+      const d = points.map((p, i) => `${{i ? "L" : "M"}}${{p[0]}},${{p[1]}}`).join(" ");
+      node(svg, "path", {{ d, fill: "none", stroke: color, "stroke-width": width, "stroke-dasharray": dash }});
+    }}
+    function smoothLine(svg, points, color, width, dash = "") {{
+      if (!points.length) return;
+      if (points.length < 3) return line(svg, points, color, width, dash);
+      let d = `M${{points[0][0]}},${{points[0][1]}}`;
+      for (let i = 0; i < points.length - 1; i++) {{
+        const p0 = points[Math.max(0, i - 1)];
+        const p1 = points[i];
+        const p2 = points[i + 1];
+        const p3 = points[Math.min(points.length - 1, i + 2)];
+        const c1x = p1[0] + (p2[0] - p0[0]) / 6;
+        const c1y = p1[1] + (p2[1] - p0[1]) / 6;
+        const c2x = p2[0] - (p3[0] - p1[0]) / 6;
+        const c2y = p2[1] - (p3[1] - p1[1]) / 6;
+        d += ` C${{c1x}},${{c1y}} ${{c2x}},${{c2y}} ${{p2[0]}},${{p2[1]}}`;
+      }}
+      node(svg, "path", {{ d, fill: "none", stroke: color, "stroke-width": width, "stroke-dasharray": dash, "stroke-linecap": "round", "stroke-linejoin": "round" }});
+    }}
+    function hoverPoints(svg, points, html, color = "#83082A") {{
+      points.forEach(p => {{
+        const hit = node(svg, "circle", {{ cx: p[0], cy: p[1], r: 7, fill: "transparent", stroke: "transparent" }});
+        hit.addEventListener("mousemove", e => showTip(e, html(p[2])));
+        hit.addEventListener("mouseleave", hideTip);
+        node(svg, "circle", {{ cx: p[0], cy: p[1], r: 3, fill: color, stroke: "#fff", "stroke-width": 1.5 }});
+      }});
+    }}
+    function node(parent, tag, attrs = {{}}, text = "") {{
+      const el = document.createElementNS("http://www.w3.org/2000/svg", tag);
+      Object.entries(attrs).forEach(([k, v]) => el.setAttribute(k, v));
+      if (text !== "") el.textContent = text;
+      parent.appendChild(el);
+      return el;
+    }}
+    function clear(el) {{ while (el.firstChild) el.removeChild(el.firstChild); }}
+    function noData(svg, w, h) {{
+      node(svg, "text", {{ x: w / 2, y: h / 2, "text-anchor": "middle", fill: "#6f6f6f", "font-size": 13 }}, "Sin datos para la selección");
+    }}
+    function fmtInt(value) {{ return value == null ? "n.d." : Math.round(value).toLocaleString("es-ES"); }}
+    function fmtPct(value) {{ return value == null || !Number.isFinite(value) ? "n.d." : `${{value.toLocaleString("es-ES", {{ maximumFractionDigits: 1 }})}}%`; }}
+    function showTip(e, html) {{
+      tooltip.innerHTML = html;
+      tooltip.style.opacity = 1;
+      tooltip.style.left = `${{Math.min(window.innerWidth - 280, e.clientX + 14)}}px`;
+      tooltip.style.top = `${{e.clientY + 14}}px`;
+    }}
+    function hideTip() {{ tooltip.style.opacity = 0; }}
+    function downloadCsv(key) {{
+      const rows = downloads[key] || [];
+      if (!rows.length) return;
+      const csv = rows.map(r => r.map(v => `"${{String(v ?? "").replaceAll('"', '""')}}"`).join(";")).join("\\n");
+      const blob = new Blob([csv], {{ type: "text/csv;charset=utf-8" }});
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `personal_universitario_${{key}}.csv`;
+      a.click();
+      URL.revokeObjectURL(a.href);
+    }}
+    init();
+  </script>
+</body>
+</html>
+"""
+    DASHBOARD_DIR.mkdir(parents=True, exist_ok=True)
+    (DASHBOARD_DIR / "index.html").write_text(html, encoding="utf-8")
+
+
 def write_outputs(data: pd.DataFrame, dims: pd.DataFrame) -> None:
     data.to_csv(PROCESSED_DIR / "personal_universitario_long.csv", index=False, encoding="utf-8-sig")
     dims.to_csv(PROCESSED_DIR / "university_dimensions.csv", index=False, encoding="utf-8-sig")
     data.to_excel(PROCESSED_DIR / "personal_universitario_long.xlsx", index=False)
     dims.to_excel(PROCESSED_DIR / "university_dimensions.xlsx", index=False)
     write_codebook()
+    write_dashboard(data)
 
     unmapped = dims[dims["dimension_source"].eq("unmapped")]
     unmapped_path = PROCESSED_DIR / "unmapped_universities.txt"
