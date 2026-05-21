@@ -473,6 +473,12 @@ def clean_options(values: pd.Series) -> list[str]:
     return options
 
 
+def dashboard_university_rows(data: pd.DataFrame) -> pd.Series:
+    university = data["Universidad"].astype(str)
+    excluded = AGGREGATE_ROWS - {"Total"}
+    return ~university.isin(excluded)
+
+
 def build_dashboard_payload(data: pd.DataFrame) -> dict[str, object]:
     dimensions = [
         "Universidad",
@@ -485,9 +491,12 @@ def build_dashboard_payload(data: pd.DataFrame) -> dict[str, object]:
         "Grupo de edad",
         "Programa investigador",
     ]
+    data = data[dashboard_university_rows(data)].copy()
     rows: list[list[object]] = []
+    filters_by_staff: dict[str, dict[str, list[str]]] = {}
     for metric in ["PDI", "PTGAS", "PEI"]:
         subset = data[data[metric].notna()]
+        filters_by_staff[metric] = {col: clean_options(subset[col]) for col in dimensions}
         for record in subset[["Curso", *dimensions, metric]].itertuples(index=False, name=None):
             *dims, value = record
             rows.append([metric, *["" if pd.isna(v) else v for v in dims], float(value)])
@@ -496,6 +505,7 @@ def build_dashboard_payload(data: pd.DataFrame) -> dict[str, object]:
         "periods": clean_options(data["Curso"]),
         "staff": ["PDI", "PTGAS", "PEI"],
         "filters": {col: clean_options(data[col]) for col in dimensions},
+        "filtersByStaff": filters_by_staff,
         "rows": rows,
     }
 
@@ -790,24 +800,32 @@ def write_dashboard(data: pd.DataFrame) -> None:
       age: "Grupo de edad",
       program: "Programa investigador"
     }};
+    const scopeKeys = ["university", "province", "ccaa", "universityType", "universityMode"];
+    const scopeTotal = {{ university: "Total", province: "España", ccaa: "España", universityType: "Total", universityMode: "Total" }};
     const els = Object.fromEntries(Object.keys(filterMap).map(k => [k, document.getElementById(k)]));
     const downloads = {{}};
-    const state = {{ tab: "PDI" }};
+    const state = {{ tab: "PDI", updating: false }};
     const tooltip = document.getElementById("tooltip");
 
     function init() {{
-      Object.entries(filterMap).forEach(([key, label]) => fillSelect(els[key], db.filters[label] || []));
+      refreshFilters();
       document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", () => {{
         state.tab = btn.dataset.tab;
         document.querySelectorAll(".tab").forEach(b => b.setAttribute("aria-selected", String(b === btn)));
         document.getElementById("programPanel").classList.toggle("hidden", state.tab !== "PEI");
+        refreshFilters();
         render();
       }}));
-      Object.values(els).forEach(el => el.addEventListener("change", render));
+      Object.entries(els).forEach(([key, el]) => el.addEventListener("change", () => {{
+        if (state.updating) return;
+        if (key === "university") applyUniversityDefaults();
+        refreshFilters(key);
+        render();
+      }}));
       document.querySelectorAll(".csv").forEach(btn => btn.addEventListener("click", () => downloadCsv(btn.dataset.download)));
       render();
     }}
-    function fillSelect(select, values) {{
+    function fillSelect(select, values, current = select.value) {{
       select.innerHTML = "";
       values.forEach(value => {{
         const opt = document.createElement("option");
@@ -815,14 +833,77 @@ def write_dashboard(data: pd.DataFrame) -> None:
         opt.textContent = value || "Sin clasificar";
         select.appendChild(opt);
       }});
+      if (values.includes(current)) select.value = current;
+      else if (values.length) select.value = values[0];
+    }}
+    function activeFilterKeys() {{
+      return Object.keys(filterMap).filter(key => key !== "program" || state.tab === "PEI");
+    }}
+    function baseRows() {{
+      return db.rows.filter(row => row[idx.metric] === state.tab && (state.tab === "PEI" || !row[idx.program]));
+    }}
+    function staffOptions(key) {{
+      return (db.filtersByStaff[state.tab] && db.filtersByStaff[state.tab][filterMap[key]]) || db.filters[filterMap[key]] || [];
+    }}
+    function isScopeTotal(key) {{
+      return scopeTotal[key] && els[key].value === scopeTotal[key];
+    }}
+    function allScopeTotal() {{
+      return scopeKeys.every(isScopeTotal);
+    }}
+    function selectedValueMatches(row, key) {{
+      if (scopeKeys.includes(key) && isScopeTotal(key)) return true;
+      return row[idx[key]] === els[key].value;
+    }}
+    function scopedRows() {{
+      return baseRows().filter(row => {{
+        if (allScopeTotal()) return row[idx.university] === "Total";
+        if (row[idx.university] === "Total") return false;
+        return activeFilterKeys().every(key => selectedValueMatches(row, key));
+      }});
+    }}
+    function candidateRows(exceptKey = null) {{
+      return baseRows().filter(row => {{
+        if (row[idx.university] === "Total" && exceptKey !== "university") return false;
+        return activeFilterKeys().every(key => key === exceptKey || selectedValueMatches(row, key));
+      }});
+    }}
+    function tabOptions(key, rows) {{
+      if (key === "university") {{
+        const values = [...new Set(rows.map(row => row[idx.university]).filter(v => v && v !== "Total"))].sort((a, b) => a.localeCompare(b, "es"));
+        return ["Total", ...values];
+      }}
+      const values = [...new Set(rows.map(row => row[idx[key]]).filter(v => v || v === ""))].sort((a, b) => String(a).localeCompare(String(b), "es"));
+      const priority = key === "sex" ? "Ambos sexos" : key === "province" || key === "ccaa" ? "España" : "Total";
+      return values.includes(priority) ? [priority, ...values.filter(v => v !== priority)] : values;
+    }}
+    function refreshFilters(changedKey = null) {{
+      state.updating = true;
+      document.getElementById("programPanel").classList.toggle("hidden", state.tab !== "PEI");
+      activeFilterKeys().forEach(key => {{
+        const rows = candidateRows(key);
+        const options = tabOptions(key, rows);
+        fillSelect(els[key], options.length ? options : staffOptions(key));
+      }});
+      if (state.tab !== "PEI") els.program.value = "Total";
+      state.updating = false;
+    }}
+    function applyUniversityDefaults() {{
+      const selected = els.university.value;
+      if (!selected || selected === "Total") return;
+      const row = baseRows().find(r => r[idx.university] === selected);
+      if (!row) return;
+      ["province", "ccaa", "universityType", "universityMode"].forEach(key => {{
+        const value = row[idx[key]];
+        if (value) fillSelect(els[key], tabOptions(key, baseRows()), value);
+      }});
     }}
     function rowMatches(row) {{
       if (row[idx.metric] !== state.tab) return false;
       if (state.tab !== "PEI" && row[idx.program]) return false;
-      return Object.keys(els).every(key => {{
-        if (key === "program" && state.tab !== "PEI") return true;
-        return row[idx[key]] === els[key].value;
-      }});
+      if (allScopeTotal()) return row[idx.university] === "Total" && activeFilterKeys().every(key => !scopeKeys.includes(key) && selectedValueMatches(row, key) || scopeKeys.includes(key));
+      if (row[idx.university] === "Total") return false;
+      return activeFilterKeys().every(key => selectedValueMatches(row, key));
     }}
     function selectedRows() {{
       const grouped = new Map();

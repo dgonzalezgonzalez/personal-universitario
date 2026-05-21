@@ -27,7 +27,7 @@ La base larga conserva categorías totales como `España`, `Ambos sexos` y `Tota
 
 El dashboard replica la estructura visual del panel de prestaciones: pestañas superiores, filtros, dos gráficos SVG y exportación CSV por gráfico.
 
-Filtros disponibles: `Universidad`, `Centro`, `Provincia`, `Comunidad autónoma`, `Tipo de universidad`, `Modalidad de universidad`, `Sexo` y `Grupo de edad`. El filtro `Programa investigador` aparece solo en la pestaña `PEI`.
+Filtros disponibles: `Universidad`, `Centro`, `Provincia`, `Comunidad autónoma`, `Tipo de universidad`, `Modalidad de universidad`, `Sexo` y `Grupo de edad`. El filtro `Programa investigador` aparece solo en la pestaña `PEI`. Los filtros se recalculan por pestaña y selección; `Universidad = Total` agrega las universidades compatibles con el resto de filtros, y las universidades individuales actualizan automáticamente provincia, comunidad autónoma, tipo y modalidad.
 
 Los gráficos muestran:
 
