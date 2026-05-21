@@ -20,7 +20,7 @@ Official unit in the three processed tables: `Personal`.
 | `Curso` | Academic year. Official PC-Axis variable `Periodo`. |
 | `Universidad` | Row label from official table. Includes total rows where present. |
 | `Centro` | Official center type dimension. `Total centros` in PDI and `Total` in PTGAS are normalized to one value: `Total`. |
-| `Provincia` | Added lookup field derived from the provided university map image. Aggregate rows use `España`. |
+| `Provincia` | Added lookup field derived from the provided university map image. Aggregate and national rows use `Total`. |
 | `Comunidad autónoma` | Added lookup field derived from the provided university map image. Aggregate rows use `España`. |
 | `Tipo de universidad` | Added lookup field derived from the provided university map image (`Pública`, `Privada`, or aggregate total label). |
 | `Modalidad de universidad` | Added lookup field derived from the provided university map image (`Presencial`, `No Presencial`, `Especial`, or aggregate total label). |

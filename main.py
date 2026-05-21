@@ -337,7 +337,7 @@ def build_university_dimensions(universities: list[str]) -> pd.DataFrame:
                 {
                     "Universidad": name,
                     "Comunidad autónoma": "España",
-                    "Provincia": "España",
+                    "Provincia": "Total",
                     "Tipo de universidad": tipo,
                     "Modalidad de universidad": modalidad,
                     "dimension_source": "aggregate_row",
@@ -345,6 +345,8 @@ def build_university_dimensions(universities: list[str]) -> pd.DataFrame:
             )
             continue
         ca, provincia, tipo, modalidad = UNIVERSITY_DIMENSIONS.get(name, ("", "", "", ""))
+        if provincia == "España":
+            provincia = "Total"
         rows.append(
             {
                 "Universidad": name,
@@ -422,7 +424,7 @@ Official unit in the three processed tables: `Personal`.
 | `Curso` | Academic year. Official PC-Axis variable `Periodo`. |
 | `Universidad` | Row label from official table. Includes total rows where present. |
 | `Centro` | Official center type dimension. `Total centros` in PDI and `Total` in PTGAS are normalized to one value: `Total`. |
-| `Provincia` | Added lookup field derived from the provided university map image. Aggregate rows use `España`. |
+| `Provincia` | Added lookup field derived from the provided university map image. Aggregate and national rows use `Total`. |
 | `Comunidad autónoma` | Added lookup field derived from the provided university map image. Aggregate rows use `España`. |
 | `Tipo de universidad` | Added lookup field derived from the provided university map image (`Pública`, `Privada`, or aggregate total label). |
 | `Modalidad de universidad` | Added lookup field derived from the provided university map image (`Presencial`, `No Presencial`, `Especial`, or aggregate total label). |
@@ -801,7 +803,7 @@ def write_dashboard(data: pd.DataFrame) -> None:
       program: "Programa investigador"
     }};
     const scopeKeys = ["university", "province", "ccaa", "universityType", "universityMode"];
-    const scopeTotal = {{ university: "Total", province: "España", ccaa: "España", universityType: "Total", universityMode: "Total" }};
+    const scopeTotal = {{ university: "Total", province: "Total", ccaa: "España", universityType: "Total", universityMode: "Total" }};
     const els = Object.fromEntries(Object.keys(filterMap).map(k => [k, document.getElementById(k)]));
     const downloads = {{}};
     const state = {{ tab: "PDI", updating: false }};
@@ -874,7 +876,7 @@ def write_dashboard(data: pd.DataFrame) -> None:
         return ["Total", ...values];
       }}
       const values = [...new Set(rows.map(row => row[idx[key]]).filter(v => v || v === ""))].sort((a, b) => String(a).localeCompare(String(b), "es"));
-      const priority = key === "sex" ? "Ambos sexos" : key === "province" || key === "ccaa" ? "España" : "Total";
+      const priority = key === "sex" ? "Ambos sexos" : key === "ccaa" ? "España" : "Total";
       if (scopeTotal[key] && !values.includes(scopeTotal[key])) values.unshift(scopeTotal[key]);
       return values.includes(priority) ? [priority, ...values.filter(v => v !== priority)] : values;
     }}

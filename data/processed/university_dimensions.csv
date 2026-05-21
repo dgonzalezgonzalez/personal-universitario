@@ -41,7 +41,7 @@ Huelva,Andalucía,Huelva,Pública,Presencial,curated_from_map_image
 IE Universidad,Castilla y León,Segovia,Privada,Presencial,curated_from_map_image
 Illes Balears (Les),Illes Balears,Illes Balears,Pública,Presencial,curated_from_map_image
 Internacional Isabel I de Castilla,Castilla y León,Burgos,Privada,No Presencial,curated_from_map_image
-Internacional Menéndez Pelayo,España,España,Pública,Especial,curated_from_map_image
+Internacional Menéndez Pelayo,España,Total,Pública,Especial,curated_from_map_image
 Internacional Valenciana,Comunitat Valenciana,Valencia/València,Privada,No Presencial,curated_from_map_image
 Internacional Villanueva,Comunidad de Madrid,Madrid,Privada,Presencial,curated_from_map_image
 Internacional de Andalucía,Andalucía,Sevilla,Pública,Especial,curated_from_map_image
@@ -60,7 +60,7 @@ Miguel Hernández de Elche,Comunitat Valenciana,Alicante/Alacant,Pública,Presen
 Mondragón Unibertsitatea,País Vasco,Gipuzkoa,Privada,Presencial,curated_from_map_image
 Murcia,Región de Murcia,Murcia,Pública,Presencial,curated_from_map_image
 Málaga,Andalucía,Málaga,Pública,Presencial,curated_from_map_image
-Nacional de Educación a Distancia,España,España,Pública,No Presencial,curated_from_map_image
+Nacional de Educación a Distancia,España,Total,Pública,No Presencial,curated_from_map_image
 Navarra,C. Foral de Navarra,Navarra,Privada,Presencial,curated_from_map_image
 Oberta de Catalunya,Cataluña,Barcelona,Privada,No Presencial,curated_from_map_image
 Oviedo,Principado de Asturias,Asturias,Pública,Presencial,curated_from_map_image
@@ -73,15 +73,15 @@ Politécnica de Madrid,Comunidad de Madrid,Madrid,Pública,Presencial,curated_fr
 Pompeu Fabra,Cataluña,Barcelona,Pública,Presencial,curated_from_map_image
 Pontificia Comillas,Comunidad de Madrid,Madrid,Privada,Presencial,curated_from_map_image
 Pontificia de Salamanca,Castilla y León,Salamanca,Privada,Presencial,curated_from_map_image
-Privada,España,España,Privada,,aggregate_row
-Privada No Presencial,España,España,Privada,No Presencial,aggregate_row
-Privada Presencial,España,España,Privada,Presencial,aggregate_row
-Pública,España,España,Pública,,aggregate_row
-Pública Especial,España,España,Pública,Especial,aggregate_row
-Pública No Presencial,España,España,Pública,No Presencial,aggregate_row
-Pública Presencial,España,España,Pública,Presencial,aggregate_row
+Privada,España,Total,Privada,,aggregate_row
+Privada No Presencial,España,Total,Privada,No Presencial,aggregate_row
+Privada Presencial,España,Total,Privada,Presencial,aggregate_row
+Pública,España,Total,Pública,,aggregate_row
+Pública Especial,España,Total,Pública,Especial,aggregate_row
+Pública No Presencial,España,Total,Pública,No Presencial,aggregate_row
+Pública Presencial,España,Total,Pública,Presencial,aggregate_row
 Pública de Navarra,C. Foral de Navarra,Navarra,Pública,Presencial,curated_from_map_image
-Públicas,España,España,Total,Total,aggregate_row
+Públicas,España,Total,Total,Total,aggregate_row
 Ramón Llull,Cataluña,Barcelona,Privada,Presencial,curated_from_map_image
 Rey Juan Carlos,Comunidad de Madrid,Madrid,Pública,Presencial,curated_from_map_image
 Rovira i Virgili,Cataluña,Tarragona,Pública,Presencial,curated_from_map_image
@@ -90,7 +90,7 @@ San Jorge,Aragón,Zaragoza,Privada,Presencial,curated_from_map_image
 San Pablo-CEU,Comunidad de Madrid,Madrid,Privada,Presencial,curated_from_map_image
 Santiago de Compostela,Galicia,A Coruña,Pública,Presencial,curated_from_map_image
 Sevilla,Andalucía,Sevilla,Pública,Presencial,curated_from_map_image
-Total,España,España,Total,Total,aggregate_row
+Total,España,Total,Total,Total,aggregate_row
 "Universidad de Diseño, Innovación y Tecnología (UD",Comunidad de Madrid,Madrid,Privada,Presencial,curated_from_map_image
 Valladolid,Castilla y León,Valladolid,Pública,Presencial,curated_from_map_image
 València (Estudi General),Comunitat Valenciana,Valencia/València,Pública,Presencial,curated_from_map_image

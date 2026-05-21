@@ -21,7 +21,7 @@ No crea ni requiere entorno virtual. Usa `pandas` y `openpyxl` si están instala
 - `data/dashboard/index.html`: dashboard interactivo estático con pestañas PDI, PTGAS y PEI, generado a partir de `data/processed/personal_universitario_long.csv`.
 - `data/dashboard/airef-logo.png`: logotipo usado por el dashboard.
 
-La base larga conserva categorías totales como `España`, `Ambos sexos` y `Total`.
+La base larga conserva categorías totales como `España`, `Ambos sexos` y `Total`. En `Provincia`, el total nacional se codifica como `Total`.
 
 ## Dashboard
 
