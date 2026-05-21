@@ -251,9 +251,31 @@ def parse_main_table(csv_path: Path, source: Source) -> pd.DataFrame:
     long[source.value_col] = long[source.value_col].map(to_number)
     long = long.dropna(subset=[source.value_col])
     long.insert(0, "Personal", source.staff)
+    long["Centro"] = long["Centro"].replace(
+        {
+            "Total centros": "Total",
+            "Centros Propios": "Centros propios",
+            "Centros Adscritos": "Centros adscritos",
+        }
+    )
     long["Indicador"] = long["Indicador"].str.replace(source.value_col, "", regex=False).str.strip()
     long["Indicador"] = long["Indicador"].replace({"en ETC": "ETC"})
     return long
+
+
+def spread_indicators(df: pd.DataFrame, source: Source) -> pd.DataFrame:
+    keys = ["Universidad", "Centro", "Sexo", "Grupo de edad", "Curso"]
+    out = (
+        df.pivot_table(index=keys, columns="Indicador", values=source.value_col, aggfunc="first")
+        .reset_index()
+        .rename_axis(columns=None)
+    )
+    rename = {"Total": source.value_col, "ETC": f"{source.value_col}_ETC"}
+    out = out.rename(columns=rename)
+    for col in [source.value_col, f"{source.value_col}_ETC"]:
+        if col not in out.columns:
+            out[col] = pd.NA
+    return out[keys + [source.value_col, f"{source.value_col}_ETC"]]
 
 
 def build_university_dimensions(universities: list[str]) -> pd.DataFrame:
@@ -295,10 +317,10 @@ def build_processed() -> tuple[pd.DataFrame, pd.DataFrame]:
             raise FileNotFoundError(f"Missing required raw file: {csv_path}")
         frames.append(parse_main_table(csv_path, src))
 
-    pdi = frames[0]
-    ptgas = frames[1]
-    keys = ["Universidad", "Centro", "Sexo", "Grupo de edad", "Indicador", "Curso"]
-    merged = pdi[keys + ["PDI"]].merge(ptgas[keys + ["PTGAS"]], on=keys, how="outer")
+    pdi = spread_indicators(frames[0], SOURCES[0])
+    ptgas = spread_indicators(frames[1], SOURCES[1])
+    keys = ["Universidad", "Centro", "Sexo", "Grupo de edad", "Curso"]
+    merged = pdi.merge(ptgas, on=keys, how="outer")
 
     dims = build_university_dimensions(merged["Universidad"].dropna().astype(str).tolist())
     out = merged.merge(dims, on="Universidad", how="left")
@@ -313,19 +335,93 @@ def build_processed() -> tuple[pd.DataFrame, pd.DataFrame]:
             "Modalidad de universidad",
             "Sexo",
             "Grupo de edad",
-            "Indicador",
             "PDI",
+            "PDI_ETC",
             "PTGAS",
+            "PTGAS_ETC",
         ]
-    ].sort_values(["Curso", "Universidad", "Centro", "Sexo", "Grupo de edad", "Indicador"])
+    ].sort_values(["Curso", "Universidad", "Centro", "Sexo", "Grupo de edad"])
     return out, dims
+
+
+def write_codebook() -> None:
+    markdown = """# Codebook
+
+Source: official PC-Axis files downloaded by `main.py` from the two ministry pages requested by the user.
+
+Official source string in the downloaded PC-Axis files:
+`Sistema Integrado de Información Universitaria (SIIU). Ministerio de Ciencia, Innovación y Universidades.`
+
+Official table descriptions used for the processed database:
+
+- `PDI0301`: `PDI por universidad, tipo de centro, sexo y grupo de edad`
+- `PAS0301`: `PTGAS por universidad, tipo de centro, sexo y grupo de edad`
+
+Official unit in both tables: `Personal`.
+
+## Variables
+
+| Variable | Meaning / provenance |
+| --- | --- |
+| `Curso` | Academic year. Official PC-Axis variable `Periodo`. |
+| `Universidad` | Row label from official table. Includes total rows where present. |
+| `Centro` | Official center type dimension. `Total centros` in PDI and `Total` in PTGAS are normalized to one value: `Total`. |
+| `Provincia` | Added lookup field derived from the provided university map image. Aggregate rows use `España`. |
+| `Comunidad autónoma` | Added lookup field derived from the provided university map image. Aggregate rows use `España`. |
+| `Tipo de universidad` | Added lookup field derived from the provided university map image (`Pública`, `Privada`, or aggregate total label). |
+| `Modalidad de universidad` | Added lookup field derived from the provided university map image (`Presencial`, `No Presencial`, `Especial`, or aggregate total label). |
+| `Sexo` | Official sex dimension. |
+| `Grupo de edad` | Official age-group dimension. PDI and PTGAS use the groups present in their official files. |
+| `PDI` | Official indicator `PDI Total`; official unit `Personal`. |
+| `PDI_ETC` | Official indicator `PDI en ETC`; stored separately from `PDI`. |
+| `PTGAS` | Official indicator `PTGAS Total`; official unit `Personal`. |
+| `PTGAS_ETC` | Official indicator `PTGAS ETC`; stored separately from `PTGAS`. The PTGAS PC-Axis note expands ETC as `Equivalente a tiempo completo`. |
+
+## Official Notes
+
+- `PDI0301` note: `(...) Dato omitido para preservar el secreto estadístico`.
+- `PAS0301` note: `(...) Dato omitido para preservar el secreto estadístico # ETC: Equivalente a tiempo completo`.
+
+## Missing Values
+
+The official CSV/PC-Axis files use `..` and `.` in some cells. The pipeline writes these as missing values.
+"""
+    (PROCESSED_DIR / "codebook.md").write_text(markdown, encoding="utf-8")
+    rows = [
+        ("Curso", "Academic year. Official PC-Axis variable Periodo."),
+        ("Universidad", "Row label from official table."),
+        ("Centro", "Official center type dimension; Total centros normalized to Total."),
+        ("Provincia", "Lookup field from provided university map image."),
+        ("Comunidad autónoma", "Lookup field from provided university map image."),
+        ("Tipo de universidad", "Lookup field from provided university map image."),
+        ("Modalidad de universidad", "Lookup field from provided university map image."),
+        ("Sexo", "Official sex dimension."),
+        ("Grupo de edad", "Official age-group dimension."),
+        ("PDI", "Official indicator PDI Total; official unit Personal."),
+        ("PDI_ETC", "Official indicator PDI en ETC; stored separately from PDI."),
+        ("PTGAS", "Official indicator PTGAS Total; official unit Personal."),
+        ("PTGAS_ETC", "Official indicator PTGAS ETC; ETC note says Equivalente a tiempo completo."),
+    ]
+    pd.DataFrame(rows, columns=["variable", "description"]).to_excel(PROCESSED_DIR / "codebook.xlsx", index=False)
+
+
+def write_excel_safely(df: pd.DataFrame, path: Path) -> Path:
+    try:
+        df.to_excel(path, index=False)
+        return path
+    except PermissionError:
+        fallback = path.with_name(f"{path.stem}_updated{path.suffix}")
+        df.to_excel(fallback, index=False)
+        print(f"excel locked, wrote fallback: {fallback}")
+        return fallback
 
 
 def write_outputs(data: pd.DataFrame, dims: pd.DataFrame) -> None:
     data.to_csv(PROCESSED_DIR / "personal_universitario_long.csv", index=False, encoding="utf-8-sig")
     dims.to_csv(PROCESSED_DIR / "university_dimensions.csv", index=False, encoding="utf-8-sig")
-    data.to_excel(PROCESSED_DIR / "personal_universitario_long.xlsx", index=False)
-    dims.to_excel(PROCESSED_DIR / "university_dimensions.xlsx", index=False)
+    write_excel_safely(data, PROCESSED_DIR / "personal_universitario_long.xlsx")
+    write_excel_safely(dims, PROCESSED_DIR / "university_dimensions.xlsx")
+    write_codebook()
 
     unmapped = dims[dims["dimension_source"].eq("unmapped")]
     unmapped_path = PROCESSED_DIR / "unmapped_universities.txt"

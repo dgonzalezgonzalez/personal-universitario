@@ -15,7 +15,9 @@ No crea ni requiere entorno virtual. Usa `pandas` y `openpyxl` si están instala
 - `data/raw/`: CSV y PC-Axis originales descargados.
 - `data/processed/personal_universitario_long.csv`: base larga con PDI y PTGAS.
 - `data/processed/personal_universitario_long.xlsx`: misma base en Excel.
+- `data/processed/personal_universitario_long_updated.xlsx`: Excel alternativo si el archivo principal está abierto y Windows no permite sobrescribirlo.
 - `data/processed/university_dimensions.csv`: tabla universidad-territorio-tipo.
 - `data/processed/university_dimensions.xlsx`: misma tabla en Excel.
+- `data/processed/codebook.md` y `data/processed/codebook.xlsx`: codebook basado en la metainformación oficial de los ficheros PC-Axis.
 
-La base larga conserva categorías totales como `España`, `Total centros`, `Ambos sexos` y `Total`.
+La base larga conserva categorías totales como `España`, `Ambos sexos` y `Total`.
