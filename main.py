@@ -862,11 +862,28 @@ def write_dashboard(data: pd.DataFrame) -> None:
         return activeFilterKeys().every(key => selectedValueMatches(row, key));
       }});
     }}
+    function rowsForOptions(targetKey) {{
+      return baseRows().filter(row => {{
+        if (targetKey !== "university" && row[idx.university] === "Total") return false;
+        return activeFilterKeys().every(key => key === targetKey || selectedValueMatches(row, key));
+      }});
+    }}
+    function optionsFromRows(key, rows) {{
+      if (key === "university") {{
+        const values = [...new Set(rows.map(row => row[idx.university]).filter(v => v && v !== "Total"))].sort((a, b) => a.localeCompare(b, "es"));
+        return ["Total", ...values];
+      }}
+      const values = [...new Set(rows.map(row => row[idx[key]]).filter(v => v || v === ""))].sort((a, b) => String(a).localeCompare(String(b), "es"));
+      const priority = key === "sex" ? "Ambos sexos" : key === "province" || key === "ccaa" ? "España" : "Total";
+      if (scopeTotal[key] && !values.includes(scopeTotal[key])) values.unshift(scopeTotal[key]);
+      return values.includes(priority) ? [priority, ...values.filter(v => v !== priority)] : values;
+    }}
     function refreshFilters(changedKey = null) {{
       state.updating = true;
       document.getElementById("programPanel").classList.toggle("hidden", state.tab !== "PEI");
       activeFilterKeys().forEach(key => {{
-        fillSelect(els[key], staffOptions(key));
+        const options = changedKey === null || key === changedKey ? staffOptions(key) : optionsFromRows(key, rowsForOptions(key));
+        fillSelect(els[key], options.length ? options : staffOptions(key));
       }});
       if (state.tab !== "PEI") els.program.value = "Total";
       state.updating = false;
