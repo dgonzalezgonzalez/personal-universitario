@@ -862,28 +862,11 @@ def write_dashboard(data: pd.DataFrame) -> None:
         return activeFilterKeys().every(key => selectedValueMatches(row, key));
       }});
     }}
-    function candidateRows(exceptKey = null) {{
-      return baseRows().filter(row => {{
-        if (row[idx.university] === "Total" && exceptKey !== "university") return false;
-        return activeFilterKeys().every(key => key === exceptKey || selectedValueMatches(row, key));
-      }});
-    }}
-    function tabOptions(key, rows) {{
-      if (key === "university") {{
-        const values = [...new Set(rows.map(row => row[idx.university]).filter(v => v && v !== "Total"))].sort((a, b) => a.localeCompare(b, "es"));
-        return ["Total", ...values];
-      }}
-      const values = [...new Set(rows.map(row => row[idx[key]]).filter(v => v || v === ""))].sort((a, b) => String(a).localeCompare(String(b), "es"));
-      const priority = key === "sex" ? "Ambos sexos" : key === "province" || key === "ccaa" ? "España" : "Total";
-      return values.includes(priority) ? [priority, ...values.filter(v => v !== priority)] : values;
-    }}
     function refreshFilters(changedKey = null) {{
       state.updating = true;
       document.getElementById("programPanel").classList.toggle("hidden", state.tab !== "PEI");
       activeFilterKeys().forEach(key => {{
-        const rows = candidateRows(key);
-        const options = tabOptions(key, rows);
-        fillSelect(els[key], options.length ? options : staffOptions(key));
+        fillSelect(els[key], staffOptions(key));
       }});
       if (state.tab !== "PEI") els.program.value = "Total";
       state.updating = false;
@@ -895,7 +878,7 @@ def write_dashboard(data: pd.DataFrame) -> None:
       if (!row) return;
       ["province", "ccaa", "universityType", "universityMode"].forEach(key => {{
         const value = row[idx[key]];
-        if (value) fillSelect(els[key], tabOptions(key, baseRows()), value);
+        if (value) fillSelect(els[key], staffOptions(key), value);
       }});
     }}
     function rowMatches(row) {{
