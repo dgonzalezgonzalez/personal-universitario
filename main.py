@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import csv
 import ssl
 import sys
 import urllib.error
@@ -38,6 +39,13 @@ SOURCES = [
         url_path="Universitaria/Personal/EPU23/PAS/PAS_TOTAL/l0",
         main_table="PAS0301",
         value_col="PTGAS",
+    ),
+    Source(
+        staff="PEI",
+        table_prefix="PEI",
+        url_path="Universitaria/Personal/EPU23/PEI/l0",
+        main_table="PEI0301",
+        value_col="PEI",
     ),
 ]
 
@@ -263,19 +271,57 @@ def parse_main_table(csv_path: Path, source: Source) -> pd.DataFrame:
     return long
 
 
-def spread_indicators(df: pd.DataFrame, source: Source) -> pd.DataFrame:
+def keep_total_indicator(df: pd.DataFrame, source: Source) -> pd.DataFrame:
     keys = ["Universidad", "Centro", "Sexo", "Grupo de edad", "Curso"]
-    out = (
-        df.pivot_table(index=keys, columns="Indicador", values=source.value_col, aggfunc="first")
-        .reset_index()
-        .rename_axis(columns=None)
-    )
-    rename = {"Total": source.value_col, "ETC": f"{source.value_col}_ETC"}
-    out = out.rename(columns=rename)
-    for col in [source.value_col, f"{source.value_col}_ETC"]:
-        if col not in out.columns:
-            out[col] = pd.NA
-    return out[keys + [source.value_col, f"{source.value_col}_ETC"]]
+    out = df[df["Indicador"].eq("Total")].copy()
+    out["Programa investigador"] = ""
+    return out[keys + ["Programa investigador", source.value_col]]
+
+
+def parse_pei_table(csv_path: Path) -> pd.DataFrame:
+    rows = list(csv.reader(csv_path.read_text(encoding="utf-8-sig").splitlines(), delimiter=";"))
+    header_rows = rows[5:8]
+    filled_headers: list[list[str]] = []
+    for header in header_rows:
+        filled: list[str] = []
+        last = ""
+        for value in header[1:]:
+            text = value.strip()
+            if text:
+                last = text
+            filled.append(last)
+        filled_headers.append(filled)
+
+    max_cols = min(len(h) for h in filled_headers)
+    records: list[dict[str, object]] = []
+    current_university = ""
+    for row in rows[8:]:
+        if not row or not row[0].strip():
+            continue
+        label = row[0]
+        values = row[1 : 1 + max_cols]
+        if not label.startswith(" ") and not any(normalize_text(v) for v in values):
+            current_university = label.strip()
+            continue
+        if not current_university:
+            continue
+        program = label.strip()
+        for i, raw_value in enumerate(values):
+            value = to_number(raw_value)
+            if value is None:
+                continue
+            records.append(
+                {
+                    "Universidad": current_university,
+                    "Centro": "Total",
+                    "Sexo": filled_headers[0][i],
+                    "Grupo de edad": filled_headers[1][i],
+                    "Curso": filled_headers[2][i],
+                    "Programa investigador": program,
+                    "PEI": value,
+                }
+            )
+    return pd.DataFrame.from_records(records)
 
 
 def build_university_dimensions(universities: list[str]) -> pd.DataFrame:
@@ -310,17 +356,23 @@ def build_university_dimensions(universities: list[str]) -> pd.DataFrame:
 
 
 def build_processed() -> tuple[pd.DataFrame, pd.DataFrame]:
-    frames = []
-    for src in SOURCES:
+    pdi_ptgas_frames = []
+    for src in SOURCES[:2]:
         csv_path = RAW_DIR / f"{src.main_table}.csv"
         if not csv_path.exists():
             raise FileNotFoundError(f"Missing required raw file: {csv_path}")
-        frames.append(parse_main_table(csv_path, src))
+        pdi_ptgas_frames.append(parse_main_table(csv_path, src))
 
-    pdi = spread_indicators(frames[0], SOURCES[0])
-    ptgas = spread_indicators(frames[1], SOURCES[1])
-    keys = ["Universidad", "Centro", "Sexo", "Grupo de edad", "Curso"]
+    pei_path = RAW_DIR / "PEI0301.csv"
+    if not pei_path.exists():
+        raise FileNotFoundError(f"Missing required raw file: {pei_path}")
+
+    pdi = keep_total_indicator(pdi_ptgas_frames[0], SOURCES[0])
+    ptgas = keep_total_indicator(pdi_ptgas_frames[1], SOURCES[1])
+    pei = parse_pei_table(pei_path)
+    keys = ["Universidad", "Centro", "Sexo", "Grupo de edad", "Curso", "Programa investigador"]
     merged = pdi.merge(ptgas, on=keys, how="outer")
+    merged = merged.merge(pei, on=keys, how="outer")
 
     dims = build_university_dimensions(merged["Universidad"].dropna().astype(str).tolist())
     out = merged.merge(dims, on="Universidad", how="left")
@@ -335,19 +387,19 @@ def build_processed() -> tuple[pd.DataFrame, pd.DataFrame]:
             "Modalidad de universidad",
             "Sexo",
             "Grupo de edad",
+            "Programa investigador",
             "PDI",
-            "PDI_ETC",
             "PTGAS",
-            "PTGAS_ETC",
+            "PEI",
         ]
-    ].sort_values(["Curso", "Universidad", "Centro", "Sexo", "Grupo de edad"])
+    ].sort_values(["Curso", "Universidad", "Centro", "Sexo", "Grupo de edad", "Programa investigador"])
     return out, dims
 
 
 def write_codebook() -> None:
     markdown = """# Codebook
 
-Source: official PC-Axis files downloaded by `main.py` from the two ministry pages requested by the user.
+Source: official PC-Axis files downloaded by `main.py` from the ministry pages requested by the user.
 
 Official source string in the downloaded PC-Axis files:
 `Sistema Integrado de Información Universitaria (SIIU). Ministerio de Ciencia, Innovación y Universidades.`
@@ -356,8 +408,9 @@ Official table descriptions used for the processed database:
 
 - `PDI0301`: `PDI por universidad, tipo de centro, sexo y grupo de edad`
 - `PAS0301`: `PTGAS por universidad, tipo de centro, sexo y grupo de edad`
+- `PEI0301`: `PEI por universidad, programa del investigador, sexo y grupo de edad`
 
-Official unit in both tables: `Personal`.
+Official unit in the three processed tables: `Personal`.
 
 ## Variables
 
@@ -371,16 +424,17 @@ Official unit in both tables: `Personal`.
 | `Tipo de universidad` | Added lookup field derived from the provided university map image (`Pública`, `Privada`, or aggregate total label). |
 | `Modalidad de universidad` | Added lookup field derived from the provided university map image (`Presencial`, `No Presencial`, `Especial`, or aggregate total label). |
 | `Sexo` | Official sex dimension. |
-| `Grupo de edad` | Official age-group dimension. PDI and PTGAS use the groups present in their official files. |
+| `Grupo de edad` | Official age-group dimension. Each source uses the groups present in its official file. |
+| `Programa investigador` | Official PEI program dimension from `PEI0301`; blank for PDI/PTGAS rows. |
 | `PDI` | Official indicator `PDI Total`; official unit `Personal`. |
-| `PDI_ETC` | Official indicator `PDI en ETC`; stored separately from `PDI`. |
 | `PTGAS` | Official indicator `PTGAS Total`; official unit `Personal`. |
-| `PTGAS_ETC` | Official indicator `PTGAS ETC`; stored separately from `PTGAS`. The PTGAS PC-Axis note expands ETC as `Equivalente a tiempo completo`. |
+| `PEI` | Official PEI values from `PEI0301`; official unit `Personal`. |
 
 ## Official Notes
 
 - `PDI0301` note: `(...) Dato omitido para preservar el secreto estadístico`.
 - `PAS0301` note: `(...) Dato omitido para preservar el secreto estadístico # ETC: Equivalente a tiempo completo`.
+- `PEI0301` note: `(...) Dato omitido para preservar el secreto estadístico # El personal empleado investigador se recoge únicamente en centros propios de las universidades. # La U. Abat Oliva CEU no ha podido facilitar la información necesaria para el cálculo del indicador.`
 
 ## Missing Values
 
@@ -397,30 +451,19 @@ The official CSV/PC-Axis files use `..` and `.` in some cells. The pipeline writ
         ("Modalidad de universidad", "Lookup field from provided university map image."),
         ("Sexo", "Official sex dimension."),
         ("Grupo de edad", "Official age-group dimension."),
+        ("Programa investigador", "Official PEI program dimension from PEI0301; blank for PDI/PTGAS rows."),
         ("PDI", "Official indicator PDI Total; official unit Personal."),
-        ("PDI_ETC", "Official indicator PDI en ETC; stored separately from PDI."),
         ("PTGAS", "Official indicator PTGAS Total; official unit Personal."),
-        ("PTGAS_ETC", "Official indicator PTGAS ETC; ETC note says Equivalente a tiempo completo."),
+        ("PEI", "Official PEI values from PEI0301; official unit Personal."),
     ]
     pd.DataFrame(rows, columns=["variable", "description"]).to_excel(PROCESSED_DIR / "codebook.xlsx", index=False)
-
-
-def write_excel_safely(df: pd.DataFrame, path: Path) -> Path:
-    try:
-        df.to_excel(path, index=False)
-        return path
-    except PermissionError:
-        fallback = path.with_name(f"{path.stem}_updated{path.suffix}")
-        df.to_excel(fallback, index=False)
-        print(f"excel locked, wrote fallback: {fallback}")
-        return fallback
 
 
 def write_outputs(data: pd.DataFrame, dims: pd.DataFrame) -> None:
     data.to_csv(PROCESSED_DIR / "personal_universitario_long.csv", index=False, encoding="utf-8-sig")
     dims.to_csv(PROCESSED_DIR / "university_dimensions.csv", index=False, encoding="utf-8-sig")
-    write_excel_safely(data, PROCESSED_DIR / "personal_universitario_long.xlsx")
-    write_excel_safely(dims, PROCESSED_DIR / "university_dimensions.xlsx")
+    data.to_excel(PROCESSED_DIR / "personal_universitario_long.xlsx", index=False)
+    dims.to_excel(PROCESSED_DIR / "university_dimensions.xlsx", index=False)
     write_codebook()
 
     unmapped = dims[dims["dimension_source"].eq("unmapped")]
