@@ -3,3 +3,6 @@ __pycache__/
 .DS_Store
 ~$*.xlsx
 data/processed/*_updated.xlsx
+data/processed/estudiantes_universitarios_long.csv
+data/raw/students/[0-9]_*.csv
+data/raw/students/[0-9]_*.px

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 import ssl
 import sys
 import urllib.error
@@ -27,6 +28,15 @@ class Source:
     value_col: str
 
 
+@dataclass(frozen=True)
+class StudentSource:
+    flow: str
+    level: str
+    url_path: str
+    table_file: str
+    has_center: bool = False
+
+
 SOURCES = [
     Source(
         staff="PDI",
@@ -48,6 +58,47 @@ SOURCES = [
         url_path="Universitaria/Personal/EPU23/PEI/l0",
         main_table="PEI0301",
         value_col="PEI",
+    ),
+]
+
+
+STUDENT_SOURCES = [
+    StudentSource(
+        flow="Estudiantes matriculados",
+        level="Grado y ciclo",
+        url_path="Universitaria/Alumnado/EEU_2025/GradoCiclo/Matriculados/l0",
+        table_file="3_4_Mat_Sex_Edad1_Amb_Univ.px",
+    ),
+    StudentSource(
+        flow="Estudiantes egresados",
+        level="Grado y ciclo",
+        url_path="Universitaria/Alumnado/EEU_2025/GradoCiclo/Egresados/l0",
+        table_file="3_3_Egr_Sex_Edad2_Amb_Univ.px",
+    ),
+    StudentSource(
+        flow="Estudiantes matriculados",
+        level="Máster",
+        url_path="Universitaria/Alumnado/EEU_2025/Master/Matriculados/l0",
+        table_file="3_4_Mat_Master_Sex_Edad2_Amb_Univ.px",
+    ),
+    StudentSource(
+        flow="Estudiantes egresados",
+        level="Máster",
+        url_path="Universitaria/Alumnado/EEU_2025/Master/Egresados/l0",
+        table_file="3_3_Egr_Master_Sex_Edad2_Amb_Univ.px",
+    ),
+    StudentSource(
+        flow="Estudiantes matriculados",
+        level="Doctorado",
+        url_path="Universitaria/Alumnado/EEU_2025/Doctorado/Matriculados/l0",
+        table_file="3_3_Mat_Sex_Edad2_Amb_Univ.px",
+    ),
+    StudentSource(
+        flow="Estudiantes egresados",
+        level="Doctorado",
+        url_path="Universitaria/Alumnado/EEU_2025/Doctorado/Egresados/l0",
+        table_file="3_3_Egr_Sex_Edad2_Amb_Univ.px",
+        has_center=True,
     ),
 ]
 
@@ -175,6 +226,7 @@ AGGREGATE_ROWS = {
 
 def mkdirs() -> None:
     RAW_DIR.mkdir(parents=True, exist_ok=True)
+    (RAW_DIR / "students").mkdir(parents=True, exist_ok=True)
     PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
     DASHBOARD_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -193,6 +245,30 @@ def valid_table_payload(payload: bytes) -> bool:
         return False
     head = payload[:300].decode("utf-8-sig", errors="ignore").lower()
     return "recuentos por universidad" in head or "universidad" in head
+
+
+def valid_student_payload(payload: bytes) -> bool:
+    if len(payload) < 500:
+        return False
+    head = payload[:400].decode("utf-8-sig", errors="ignore").lower()
+    return "estudiantes" in head or "matriculados" in head or "egresados" in head
+
+
+def slug(value: str) -> str:
+    text = (
+        value.lower()
+        .replace("á", "a")
+        .replace("é", "e")
+        .replace("í", "i")
+        .replace("ó", "o")
+        .replace("ú", "u")
+        .replace("ñ", "n")
+    )
+    return re.sub(r"[^a-z0-9]+", "_", text).strip("_")
+
+
+def student_raw_stem(source: StudentSource) -> str:
+    return f"{slug(source.flow)}_{slug(source.level)}_{Path(source.table_file).stem}"
 
 
 def discover_and_download_raw() -> list[Path]:
@@ -217,6 +293,19 @@ def discover_and_download_raw() -> list[Path]:
             if i > 8 and not any_valid:
                 # Tables are numbered contiguously in this section; keep a small buffer after known IDs.
                 pass
+    for src in STUDENT_SOURCES:
+        for fmt, ext in [("csv_sc", "csv"), ("px", "px")]:
+            url = f"{BASE_URL}/{fmt}/{src.url_path}/{src.table_file}"
+            try:
+                payload = download(url)
+            except (urllib.error.HTTPError, urllib.error.URLError, TimeoutError, ssl.SSLError):
+                continue
+            if not valid_student_payload(payload):
+                continue
+            out = RAW_DIR / "students" / f"{student_raw_stem(src)}.{ext}"
+            out.write_bytes(payload)
+            saved.append(out)
+            print(f"student raw saved: {out}")
     return saved
 
 
@@ -236,6 +325,85 @@ def to_number(value: object) -> float | None:
         return float(text)
     except ValueError:
         return None
+
+
+def normalize_student_label(value: object) -> str:
+    text = normalize_text(value)
+    replacements = {
+        "Todas las universidades": "Total",
+        "Total universidades": "Total",
+        "Total centros": "Total",
+    }
+    return replacements.get(text, text)
+
+
+def parse_student_table(csv_path: Path, source: StudentSource) -> pd.DataFrame:
+    rows = list(csv.reader(csv_path.read_text(encoding="utf-8-sig").splitlines(), delimiter=";"))
+    period_re = re.compile(r"^\d{4}-\d{4}$")
+    period_row_idx = next(
+        i
+        for i, row in enumerate(rows)
+        if sum(1 for value in row[1:] if period_re.match(normalize_text(value))) >= 3
+    )
+    scope_row = rows[period_row_idx - 1][1:]
+    period_row = rows[period_row_idx][1:]
+
+    scopes: list[str] = []
+    last_scope = ""
+    for raw in scope_row:
+        scope = normalize_student_label(raw)
+        if scope:
+            last_scope = scope
+        scopes.append(last_scope)
+
+    records: list[dict[str, object]] = []
+    university = ""
+    center = "Total"
+    sex = ""
+
+    for row in rows[period_row_idx + 1 :]:
+        if not row:
+            continue
+        raw_label = row[0]
+        label = normalize_student_label(raw_label)
+        values = row[1 : 1 + min(len(scopes), len(period_row))]
+        has_values = any(to_number(value) is not None for value in values)
+        if not label:
+            continue
+
+        indent = len(raw_label) - len(raw_label.lstrip(" "))
+        if not has_values:
+            if indent == 0:
+                university = label
+                center = "Total"
+                sex = ""
+            elif source.has_center and indent <= 4:
+                center = label
+                sex = ""
+            else:
+                sex = label
+            continue
+
+        age_group = label
+        for i, raw_value in enumerate(values):
+            value = to_number(raw_value)
+            if value is None:
+                continue
+            records.append(
+                {
+                    "Flujo": source.flow,
+                    "Nivel académico": source.level,
+                    "Curso": period_row[i],
+                    "Universidad": university,
+                    "Centro": center,
+                    "Sexo": sex,
+                    "Grupo de edad": age_group,
+                    "Ámbito de estudio": scopes[i],
+                    "Estudiantes": value,
+                }
+            )
+
+    return pd.DataFrame.from_records(records)
 
 
 def forward_fill_columns(columns: pd.MultiIndex) -> pd.MultiIndex:
@@ -401,6 +569,58 @@ def build_processed() -> tuple[pd.DataFrame, pd.DataFrame]:
     return out, dims
 
 
+def build_student_processed(dims: pd.DataFrame) -> pd.DataFrame:
+    frames = []
+    for src in STUDENT_SOURCES:
+        csv_path = RAW_DIR / "students" / f"{student_raw_stem(src)}.csv"
+        if not csv_path.exists():
+            raise FileNotFoundError(f"Missing required student raw file: {csv_path}")
+        frames.append(parse_student_table(csv_path, src))
+
+    students = pd.concat(frames, ignore_index=True)
+    students["Centro"] = students["Centro"].replace(
+        {
+            "Total centros": "Total",
+            "Centros Propios": "Centros propios",
+            "Centros Adscritos": "Centros adscritos",
+        }
+    )
+    student_dims = build_university_dimensions(students["Universidad"].dropna().astype(str).tolist())
+    known_dims = pd.concat([dims, student_dims], ignore_index=True)
+    known_dims = known_dims.drop_duplicates("Universidad", keep="first")
+    out = students.merge(
+        known_dims[
+            [
+                "Universidad",
+                "Provincia",
+                "Comunidad autónoma",
+                "Tipo de universidad",
+                "Modalidad de universidad",
+            ]
+        ],
+        on="Universidad",
+        how="left",
+    )
+    out = out[
+        [
+            "Flujo",
+            "Nivel académico",
+            "Curso",
+            "Universidad",
+            "Centro",
+            "Provincia",
+            "Comunidad autónoma",
+            "Tipo de universidad",
+            "Modalidad de universidad",
+            "Sexo",
+            "Grupo de edad",
+            "Ámbito de estudio",
+            "Estudiantes",
+        ]
+    ].sort_values(["Flujo", "Nivel académico", "Curso", "Universidad", "Centro", "Sexo", "Grupo de edad", "Ámbito de estudio"])
+    return out
+
+
 def write_codebook() -> None:
     markdown = """# Codebook
 
@@ -414,8 +634,9 @@ Official table descriptions used for the processed database:
 - `PDI0301`: `PDI por universidad, tipo de centro, sexo y grupo de edad`
 - `PAS0301`: `PTGAS por universidad, tipo de centro, sexo y grupo de edad`
 - `PEI0301`: `PEI por universidad, programa del investigador, sexo y grupo de edad`
+- Student tables under `EEU_2025`: per-university matriculados and egresados tables by sex, age group and ámbito de estudio for Grado y ciclo, Máster and Doctorado.
 
-Official unit in the three processed tables: `Personal`.
+Official units: `Personal` for staff tables and `Número de estudiantes` for student tables.
 
 ## Variables
 
@@ -430,10 +651,14 @@ Official unit in the three processed tables: `Personal`.
 | `Modalidad de universidad` | Added lookup field derived from the provided university map image (`Presencial`, `No Presencial`, `Especial`, or aggregate total label). |
 | `Sexo` | Official sex dimension. |
 | `Grupo de edad` | Official age-group dimension. Each source uses the groups present in its official file. |
+| `Nivel académico` | Student level: `Grado y ciclo`, `Máster` or `Doctorado`; `Total` for staff rows in the dashboard payload. |
+| `Ámbito de estudio` | Official student field dimension from the requested ámbito de estudio tables; `Total` for staff rows. |
 | `Programa investigador` | Official PEI program dimension from `PEI0301`; blank for PDI/PTGAS rows. |
 | `PDI` | Official indicator `PDI Total`; official unit `Personal`. |
 | `PTGAS` | Official indicator `PTGAS Total`; official unit `Personal`. |
 | `PEI` | Official PEI values from `PEI0301`; official unit `Personal`. |
+| `Flujo` | Student flow: `Estudiantes matriculados` or `Estudiantes egresados`. |
+| `Estudiantes` | Official student count from the requested SIIU tables. |
 
 ## Official Notes
 
@@ -456,10 +681,14 @@ The official CSV/PC-Axis files use `..` and `.` in some cells. The pipeline writ
         ("Modalidad de universidad", "Lookup field from provided university map image."),
         ("Sexo", "Official sex dimension."),
         ("Grupo de edad", "Official age-group dimension."),
+        ("Nivel académico", "Student level: Grado y ciclo, Máster or Doctorado."),
+        ("Ámbito de estudio", "Official student field dimension from SIIU ámbito de estudio tables."),
         ("Programa investigador", "Official PEI program dimension from PEI0301; blank for PDI/PTGAS rows."),
         ("PDI", "Official indicator PDI Total; official unit Personal."),
         ("PTGAS", "Official indicator PTGAS Total; official unit Personal."),
         ("PEI", "Official PEI values from PEI0301; official unit Personal."),
+        ("Flujo", "Student flow: Estudiantes matriculados or Estudiantes egresados."),
+        ("Estudiantes", "Official student count; official unit Número de estudiantes."),
     ]
     pd.DataFrame(rows, columns=["variable", "description"]).to_excel(PROCESSED_DIR / "codebook.xlsx", index=False)
 
@@ -481,7 +710,7 @@ def dashboard_university_rows(data: pd.DataFrame) -> pd.Series:
     return ~university.isin(excluded)
 
 
-def build_dashboard_payload(data: pd.DataFrame) -> dict[str, object]:
+def build_dashboard_payload(data: pd.DataFrame, students: pd.DataFrame | None = None) -> dict[str, object]:
     dimensions = [
         "Universidad",
         "Centro",
@@ -491,9 +720,13 @@ def build_dashboard_payload(data: pd.DataFrame) -> dict[str, object]:
         "Modalidad de universidad",
         "Sexo",
         "Grupo de edad",
+        "Nivel académico",
+        "Ámbito de estudio",
         "Programa investigador",
     ]
     data = data[dashboard_university_rows(data)].copy()
+    data["Nivel académico"] = "Total"
+    data["Ámbito de estudio"] = "Total"
     rows: list[list[object]] = []
     filters_by_staff: dict[str, dict[str, list[str]]] = {}
     for metric in ["PDI", "PTGAS", "PEI"]:
@@ -503,23 +736,68 @@ def build_dashboard_payload(data: pd.DataFrame) -> dict[str, object]:
             *dims, value = record
             rows.append([metric, *["" if pd.isna(v) else v for v in dims], float(value)])
 
+    metrics = ["PDI", "PTGAS", "PEI"]
+    if students is not None and not students.empty:
+        students = students[dashboard_university_rows(students)].copy()
+        students["Programa investigador"] = "Total"
+        for metric in ["Estudiantes matriculados", "Estudiantes egresados"]:
+            subset = students[students["Flujo"].eq(metric)]
+            filters_by_staff[metric] = {col: clean_options(subset[col]) for col in dimensions}
+            if "Total" not in filters_by_staff[metric]["Nivel académico"]:
+                filters_by_staff[metric]["Nivel académico"] = ["Total", *filters_by_staff[metric]["Nivel académico"]]
+            for record in subset[["Curso", *dimensions, "Estudiantes"]].itertuples(index=False, name=None):
+                *dims, value = record
+                rows.append([metric, *["" if pd.isna(v) else v for v in dims], float(value)])
+        metrics.extend(["Estudiantes matriculados", "Estudiantes egresados"])
+
+    filter_frames = [data[dimensions]]
+    if students is not None and not students.empty:
+        filter_frames.append(students.assign(**{"Programa investigador": "Total"})[dimensions])
+    filters_source = pd.concat(filter_frames, ignore_index=True)
+    dict_keys = [
+        "metric",
+        "period",
+        "university",
+        "center",
+        "province",
+        "ccaa",
+        "universityType",
+        "universityMode",
+        "sex",
+        "age",
+        "academicLevel",
+        "field",
+        "program",
+    ]
+    dictionaries: dict[str, list[object]] = {}
+    lookups: dict[str, dict[object, int]] = {}
+    for pos, key in enumerate(dict_keys):
+        values = sorted({row[pos] for row in rows}, key=lambda value: str(value))
+        dictionaries[key] = values
+        lookups[key] = {value: i for i, value in enumerate(values)}
+    encoded_rows = [
+        [*[lookups[key][row[pos]] for pos, key in enumerate(dict_keys)], row[-1]]
+        for row in rows
+    ]
+
     return {
-        "periods": clean_options(data["Curso"]),
-        "staff": ["PDI", "PTGAS", "PEI"],
-        "filters": {col: clean_options(data[col]) for col in dimensions},
+        "periods": clean_options(pd.Series([row[1] for row in rows])),
+        "staff": metrics,
+        "filters": {col: clean_options(filters_source[col]) for col in dimensions},
         "filtersByStaff": filters_by_staff,
-        "rows": rows,
+        "dicts": dictionaries,
+        "rows": encoded_rows,
     }
 
 
-def write_dashboard(data: pd.DataFrame) -> None:
-    payload = json.dumps(build_dashboard_payload(data), ensure_ascii=False, separators=(",", ":"))
+def write_dashboard(data: pd.DataFrame, students: pd.DataFrame | None = None) -> None:
+    payload = json.dumps(build_dashboard_payload(data, students), ensure_ascii=False, separators=(",", ":"))
     html = f"""<!doctype html>
 <html lang="es">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Indicadores de personal universitario</title>
+  <title>Indicadores universitarios</title>
   <style>
     :root {{
       --burgundy: #83082A;
@@ -734,17 +1012,19 @@ def write_dashboard(data: pd.DataFrame) -> None:
       <div class="brand">
         <img class="logo" src="airef-logo.png" alt="AIReF">
         <div>
-          <h1>Indicadores de personal universitario</h1>
-          <p class="subtitle">Dashboard interactivo de PDI, PTGAS y PEI por universidad (2015-2024)</p>
+          <h1>Indicadores universitarios</h1>
+          <p class="subtitle">Dashboard interactivo de personal y estudiantes por universidad (2015-2025)</p>
         </div>
       </div>
     </div>
   </header>
   <main>
-    <nav class="tabs" aria-label="Tipo de personal">
+    <nav class="tabs" aria-label="Indicador">
       <button class="tab" data-tab="PDI" aria-selected="true">PDI</button>
       <button class="tab" data-tab="PTGAS" aria-selected="false">PTGAS</button>
       <button class="tab" data-tab="PEI" aria-selected="false">PEI</button>
+      <button class="tab" data-tab="Estudiantes matriculados" aria-selected="false">Estudiantes matriculados</button>
+      <button class="tab" data-tab="Estudiantes egresados" aria-selected="false">Estudiantes egresados</button>
     </nav>
 
     <section class="filters" aria-label="Filtros">
@@ -756,6 +1036,8 @@ def write_dashboard(data: pd.DataFrame) -> None:
       <label>Modalidad de universidad<select id="universityMode"></select></label>
       <label>Sexo<select id="sex"></select></label>
       <label>Grupo de edad<select id="age"></select></label>
+      <label id="academicPanel" class="hidden">Nivel académico<select id="academicLevel"></select></label>
+      <label id="fieldPanel" class="hidden">Ámbito de estudio<select id="field"></select></label>
       <label id="programPanel" class="hidden">Programa investigador<select id="program"></select></label>
     </section>
 
@@ -763,7 +1045,7 @@ def write_dashboard(data: pd.DataFrame) -> None:
       <article class="panel" id="evolutionPanel">
         <div class="panel-head">
           <div>
-            <h2>Número de empleados</h2>
+            <h2 id="countTitle">Número de empleados</h2>
             <p class="desc">Serie anual de la selección.</p>
           </div>
           <button class="csv" data-download="evolution">CSV</button>
@@ -790,7 +1072,7 @@ def write_dashboard(data: pd.DataFrame) -> None:
 
   <script>
     const db = {payload};
-    const idx = {{metric:0, period:1, university:2, center:3, province:4, ccaa:5, universityType:6, universityMode:7, sex:8, age:9, program:10, value:11}};
+    const idx = {{metric:0, period:1, university:2, center:3, province:4, ccaa:5, universityType:6, universityMode:7, sex:8, age:9, academicLevel:10, field:11, program:12, value:13}};
     const filterMap = {{
       university: "Universidad",
       center: "Centro",
@@ -800,6 +1082,8 @@ def write_dashboard(data: pd.DataFrame) -> None:
       universityMode: "Modalidad de universidad",
       sex: "Sexo",
       age: "Grupo de edad",
+      academicLevel: "Nivel académico",
+      field: "Ámbito de estudio",
       program: "Programa investigador"
     }};
     const scopeKeys = ["university", "province", "ccaa", "universityType", "universityMode"];
@@ -809,12 +1093,15 @@ def write_dashboard(data: pd.DataFrame) -> None:
     const state = {{ tab: "PDI", updating: false }};
     const tooltip = document.getElementById("tooltip");
 
+    function isStudentTab() {{ return state.tab.startsWith("Estudiantes "); }}
+    function cell(row, key) {{ return key === "value" ? row[idx.value] : db.dicts[key][row[idx[key]]]; }}
+
     function init() {{
       refreshFilters();
       document.querySelectorAll(".tab").forEach(btn => btn.addEventListener("click", () => {{
         state.tab = btn.dataset.tab;
         document.querySelectorAll(".tab").forEach(b => b.setAttribute("aria-selected", String(b === btn)));
-        document.getElementById("programPanel").classList.toggle("hidden", state.tab !== "PEI");
+        togglePanels();
         refreshFilters();
         render();
       }}));
@@ -839,10 +1126,14 @@ def write_dashboard(data: pd.DataFrame) -> None:
       else if (values.length) select.value = values[0];
     }}
     function activeFilterKeys() {{
-      return Object.keys(filterMap).filter(key => key !== "program" || state.tab === "PEI");
+      return Object.keys(filterMap).filter(key => {{
+        if (key === "program") return state.tab === "PEI";
+        if (key === "academicLevel" || key === "field") return isStudentTab();
+        return true;
+      }});
     }}
     function baseRows() {{
-      return db.rows.filter(row => row[idx.metric] === state.tab && (state.tab === "PEI" || !row[idx.program]));
+      return db.rows.filter(row => cell(row, "metric") === state.tab && (state.tab === "PEI" || cell(row, "program") === "Total" || !cell(row, "program")));
     }}
     function staffOptions(key) {{
       return (db.filtersByStaff[state.tab] && db.filtersByStaff[state.tab][filterMap[key]]) || db.filters[filterMap[key]] || [];
@@ -855,71 +1146,84 @@ def write_dashboard(data: pd.DataFrame) -> None:
     }}
     function selectedValueMatches(row, key) {{
       if (scopeKeys.includes(key) && isScopeTotal(key)) return true;
-      return row[idx[key]] === els[key].value;
+      if ((key === "academicLevel" || key === "field") && els[key].value === "Total") return true;
+      return cell(row, key) === els[key].value;
     }}
     function scopedRows() {{
       return baseRows().filter(row => {{
-        if (allScopeTotal()) return row[idx.university] === "Total";
-        if (row[idx.university] === "Total") return false;
+        if (allScopeTotal()) return cell(row, "university") === "Total";
+        if (cell(row, "university") === "Total") return false;
         return activeFilterKeys().every(key => selectedValueMatches(row, key));
       }});
     }}
     function rowsForOptions(targetKey) {{
       return baseRows().filter(row => {{
-        if (targetKey !== "university" && row[idx.university] === "Total") return false;
+        if (targetKey !== "university" && cell(row, "university") === "Total") return false;
         return activeFilterKeys().every(key => key === targetKey || selectedValueMatches(row, key));
       }});
     }}
     function optionsFromRows(key, rows) {{
       if (key === "university") {{
-        const values = [...new Set(rows.map(row => row[idx.university]).filter(v => v && v !== "Total"))].sort((a, b) => a.localeCompare(b, "es"));
+        const values = [...new Set(rows.map(row => cell(row, "university")).filter(v => v && v !== "Total"))].sort((a, b) => a.localeCompare(b, "es"));
         return ["Total", ...values];
       }}
-      const values = [...new Set(rows.map(row => row[idx[key]]).filter(v => v || v === ""))].sort((a, b) => String(a).localeCompare(String(b), "es"));
+      const values = [...new Set(rows.map(row => cell(row, key)).filter(v => v || v === ""))].sort((a, b) => String(a).localeCompare(String(b), "es"));
       const priority = key === "sex" ? "Ambos sexos" : key === "ccaa" ? "España" : "Total";
+      if ((key === "academicLevel" || key === "field") && !values.includes("Total")) values.unshift("Total");
       if (scopeTotal[key] && !values.includes(scopeTotal[key])) values.unshift(scopeTotal[key]);
       return values.includes(priority) ? [priority, ...values.filter(v => v !== priority)] : values;
     }}
+    function togglePanels() {{
+      document.getElementById("programPanel").classList.toggle("hidden", state.tab !== "PEI");
+      document.getElementById("academicPanel").classList.toggle("hidden", !isStudentTab());
+      document.getElementById("fieldPanel").classList.toggle("hidden", !isStudentTab());
+      document.getElementById("countTitle").textContent = isStudentTab() ? "Número de estudiantes" : "Número de empleados";
+    }}
     function refreshFilters(changedKey = null) {{
       state.updating = true;
-      document.getElementById("programPanel").classList.toggle("hidden", state.tab !== "PEI");
+      togglePanels();
       activeFilterKeys().forEach(key => {{
         const options = changedKey === null || key === changedKey ? staffOptions(key) : optionsFromRows(key, rowsForOptions(key));
         fillSelect(els[key], options.length ? options : staffOptions(key));
       }});
       if (state.tab !== "PEI") els.program.value = "Total";
+      if (!isStudentTab()) {{
+        els.academicLevel.value = "Total";
+        els.field.value = "Total";
+      }}
       state.updating = false;
     }}
     function applyUniversityDefaults() {{
       const selected = els.university.value;
       if (!selected || selected === "Total") return;
-      const row = baseRows().find(r => r[idx.university] === selected);
+      const row = baseRows().find(r => cell(r, "university") === selected);
       if (!row) return;
       ["province", "ccaa", "universityType", "universityMode"].forEach(key => {{
-        const value = row[idx[key]];
+        const value = cell(row, key);
         if (value) fillSelect(els[key], staffOptions(key), value);
       }});
     }}
     function rowMatches(row) {{
-      if (row[idx.metric] !== state.tab) return false;
-      if (state.tab !== "PEI" && row[idx.program]) return false;
-      if (allScopeTotal()) return row[idx.university] === "Total" && activeFilterKeys().every(key => !scopeKeys.includes(key) && selectedValueMatches(row, key) || scopeKeys.includes(key));
-      if (row[idx.university] === "Total") return false;
+      if (cell(row, "metric") !== state.tab) return false;
+      if (state.tab !== "PEI" && cell(row, "program") && cell(row, "program") !== "Total") return false;
+      if (allScopeTotal()) return cell(row, "university") === "Total" && activeFilterKeys().every(key => !scopeKeys.includes(key) && selectedValueMatches(row, key) || scopeKeys.includes(key));
+      if (cell(row, "university") === "Total") return false;
       return activeFilterKeys().every(key => selectedValueMatches(row, key));
     }}
     function selectedRows() {{
       const grouped = new Map();
-      db.rows.filter(rowMatches).forEach(row => grouped.set(row[idx.period], (grouped.get(row[idx.period]) || 0) + (row[idx.value] || 0)));
+      db.rows.filter(rowMatches).forEach(row => grouped.set(cell(row, "period"), (grouped.get(cell(row, "period")) || 0) + (cell(row, "value") || 0)));
       return db.periods.map(period => ({{ period, value: grouped.get(period) ?? null }})).filter(d => d.value != null);
     }}
     function totalRows() {{
       const grouped = new Map();
       db.rows.forEach(row => {{
-        if (row[idx.metric] !== state.tab) return;
-        if (row[idx.university] !== "Total" || row[idx.center] !== "Total" || row[idx.sex] !== "Ambos sexos" || row[idx.age] !== "Total") return;
-        if (state.tab === "PEI" && row[idx.program] !== "Total") return;
-        if (state.tab !== "PEI" && row[idx.program]) return;
-        grouped.set(row[idx.period], (grouped.get(row[idx.period]) || 0) + (row[idx.value] || 0));
+        if (cell(row, "metric") !== state.tab) return;
+        if (cell(row, "university") !== "Total" || cell(row, "center") !== "Total" || cell(row, "sex") !== "Ambos sexos" || cell(row, "age") !== "Total") return;
+        if (isStudentTab() && cell(row, "field") !== "Total") return;
+        if (state.tab === "PEI" && cell(row, "program") !== "Total") return;
+        if (state.tab !== "PEI" && !isStudentTab() && cell(row, "program")) return;
+        grouped.set(cell(row, "period"), (grouped.get(cell(row, "period")) || 0) + (cell(row, "value") || 0));
       }});
       return db.periods.map(period => ({{ period, value: grouped.get(period) ?? null }})).filter(d => d.value != null);
     }}
@@ -947,12 +1251,12 @@ def write_dashboard(data: pd.DataFrame) -> None:
       const y = v => h - m.b - v / maxY * (h - m.t - m.b);
       grid(svg, w, h, m, 5, maxY, countAxisLabel(maxY));
       axisLabels(svg, rows, x, h, m);
-      axisTitles(svg, w, h, m, "Curso", "Empleados");
+      axisTitles(svg, w, h, m, "Curso", isStudentTab() ? "Estudiantes" : "Empleados");
       const pts = rows.map((r, i) => [x(i), y(r.value || 0), r]);
       smoothLine(svg, pts, "#83082A", 2.5);
       hoverPoints(svg, pts, r => `<strong>${{r.period}}</strong><br>${{selectionLabel()}}: ${{fmtInt(r.value)}}<br>Variación interanual: ${{fmtPct(yoyFor(rows, r))}}`);
       node(svg, "text", {{ x: m.l, y: 18, fill: "#83082A", "font-size": 12, "font-weight": 700 }}, selectionLabel());
-      downloads.evolution = [["Curso","Empleados","Variación interanual"], ...rows.map(r => [r.period, r.value, yoyFor(rows, r)])];
+      downloads.evolution = [["Curso", isStudentTab() ? "Estudiantes" : "Empleados","Variación interanual"], ...rows.map(r => [r.period, r.value, yoyFor(rows, r)])];
     }}
     function renderShare(rows) {{
       const svg = document.getElementById("share"); clear(svg);
@@ -1076,13 +1380,16 @@ def write_dashboard(data: pd.DataFrame) -> None:
     (DASHBOARD_DIR / "index.html").write_text(html, encoding="utf-8")
 
 
-def write_outputs(data: pd.DataFrame, dims: pd.DataFrame) -> None:
+def write_outputs(data: pd.DataFrame, dims: pd.DataFrame, students: pd.DataFrame) -> None:
     data.to_csv(PROCESSED_DIR / "personal_universitario_long.csv", index=False, encoding="utf-8-sig")
+    students.to_csv(PROCESSED_DIR / "estudiantes_universitarios_long.csv", index=False, encoding="utf-8-sig")
+    students.to_csv(PROCESSED_DIR / "estudiantes_universitarios_long.csv.gz", index=False, encoding="utf-8-sig", compression="gzip")
     dims.to_csv(PROCESSED_DIR / "university_dimensions.csv", index=False, encoding="utf-8-sig")
     data.to_excel(PROCESSED_DIR / "personal_universitario_long.xlsx", index=False)
+    students.to_excel(PROCESSED_DIR / "estudiantes_universitarios_long.xlsx", index=False)
     dims.to_excel(PROCESSED_DIR / "university_dimensions.xlsx", index=False)
     write_codebook()
-    write_dashboard(data)
+    write_dashboard(data, students)
 
     unmapped = dims[dims["dimension_source"].eq("unmapped")]
     unmapped_path = PROCESSED_DIR / "unmapped_universities.txt"
@@ -1102,8 +1409,10 @@ def main() -> int:
         print("No raw files downloaded. Check network or source URLs.", file=sys.stderr)
         return 1
     data, dims = build_processed()
-    write_outputs(data, dims)
+    students = build_student_processed(dims)
+    write_outputs(data, dims, students)
     print(f"processed rows: {len(data):,}")
+    print(f"student rows: {len(students):,}")
     print(f"universities/dimension rows: {len(dims):,}")
     print(f"unmapped universities: {dims['dimension_source'].eq('unmapped').sum():,}")
     return 0

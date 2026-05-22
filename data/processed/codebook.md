@@ -10,8 +10,9 @@ Official table descriptions used for the processed database:
 - `PDI0301`: `PDI por universidad, tipo de centro, sexo y grupo de edad`
 - `PAS0301`: `PTGAS por universidad, tipo de centro, sexo y grupo de edad`
 - `PEI0301`: `PEI por universidad, programa del investigador, sexo y grupo de edad`
+- Student tables under `EEU_2025`: per-university matriculados and egresados tables by sex, age group and ámbito de estudio for Grado y ciclo, Máster and Doctorado.
 
-Official unit in the three processed tables: `Personal`.
+Official units: `Personal` for staff tables and `Número de estudiantes` for student tables.
 
 ## Variables
 
@@ -26,10 +27,14 @@ Official unit in the three processed tables: `Personal`.
 | `Modalidad de universidad` | Added lookup field derived from the provided university map image (`Presencial`, `No Presencial`, `Especial`, or aggregate total label). |
 | `Sexo` | Official sex dimension. |
 | `Grupo de edad` | Official age-group dimension. Each source uses the groups present in its official file. |
+| `Nivel académico` | Student level: `Grado y ciclo`, `Máster` or `Doctorado`; `Total` for staff rows in the dashboard payload. |
+| `Ámbito de estudio` | Official student field dimension from the requested ámbito de estudio tables; `Total` for staff rows. |
 | `Programa investigador` | Official PEI program dimension from `PEI0301`; blank for PDI/PTGAS rows. |
 | `PDI` | Official indicator `PDI Total`; official unit `Personal`. |
 | `PTGAS` | Official indicator `PTGAS Total`; official unit `Personal`. |
 | `PEI` | Official PEI values from `PEI0301`; official unit `Personal`. |
+| `Flujo` | Student flow: `Estudiantes matriculados` or `Estudiantes egresados`. |
+| `Estudiantes` | Official student count from the requested SIIU tables. |
 
 ## Official Notes
 
