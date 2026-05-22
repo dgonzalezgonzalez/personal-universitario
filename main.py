@@ -103,6 +103,9 @@ STUDENT_SOURCES = [
 ]
 
 
+SEX_LABELS = {"Ambos sexos", "Hombres", "Mujeres"}
+
+
 UNIVERSITY_DIMENSIONS = {
     "A Coruña": ("Galicia", "A Coruña", "Pública", "Presencial"),
     "Santiago de Compostela": ("Galicia", "A Coruña", "Pública", "Presencial"),
@@ -377,11 +380,11 @@ def parse_student_table(csv_path: Path, source: StudentSource) -> pd.DataFrame:
                 university = label
                 center = "Total"
                 sex = ""
+            elif label in SEX_LABELS:
+                sex = label
             elif source.has_center and indent <= 4:
                 center = label
                 sex = ""
-            else:
-                sex = label
             continue
 
         age_group = label
